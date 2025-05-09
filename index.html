@@ -1,0 +1,376 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>嚇鼠了神敲敲遊戲系統</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #f0f0f0;
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+            user-select: none;
+        }
+        #game-container {
+            background-color: #4caf50;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            position: relative;
+            width: 740px;
+            height: 700px;
+        }
+        #game-canvas {
+            background-color: transparent;
+            display: block;
+        }
+        #score, #time {
+            position: absolute;
+            top: 20px;
+            color: white;
+            font-size: 24px;
+            font-weight: bold;
+        }
+        #score { left: 20px; }
+        #time { right: 20px; }
+        #mode-select, #game-over, #leaderboard {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        #mode-select.active, #game-over.active, #leaderboard.active {
+            display: block;
+        }
+        #history-scores li, #leaderboard-30 li, #leaderboard-60 li {
+            margin: 5px 0;
+        }
+        button {
+            margin: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <h1 class="text-3xl text-center text-white mb-4">嚇鼠了神敲敲遊戲系統</h1>
+        <canvas id="game-canvas" width="700" height="600"></canvas>
+        <div id="score">分數: 0</div>
+        <div id="time">時間: 30</div>
+        <div id="mode-select" class="active">
+            <h2 class="text-2xl mb-4">選擇遊戲模式</h2>
+            <button id="mode-30" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">30 秒</button>
+            <button id="mode-60" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">60 秒</button>
+        </div>
+        <div id="game-over">
+            <h2 class="text-2xl mb-4">遊戲結束！</h2>
+            <p id="final-score" class="text-xl mb-4"></p>
+            <h3 class="text-lg mb-2">歷史分數</h3>
+            <ul id="history-scores" class="text-left"></ul>
+            <button id="leaderboard-btn" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">查看排行榜</button>
+            <button id="restart" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">重新開始</button>
+        </div>
+        <div id="leaderboard">
+            <h2 class="text-2xl mb-4">排行榜</h2>
+            <h3 class="text-lg mb-2">30 秒模式</h3>
+            <ul id="leaderboard-30" class="text-left"></ul>
+            <h3 class="text-lg mb-2">60 秒模式</h3>
+            <ul id="leaderboard-60" class="text-left"></ul>
+            <button id="close-leaderboard" class="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">關閉</button>
+        </div>
+    </div>
+    <audio id="mole-hit" src="https://freesound.org/data/previews/340/340803_5882626-lq.mp3"></audio>
+
+    <script>
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('score');
+        const timeDisplay = document.getElementById('time');
+        const modeSelect = document.getElementById('mode-select');
+        const gameOverScreen = document.getElementById('game-over');
+        const leaderboardScreen = document.getElementById('leaderboard');
+        const finalScoreDisplay = document.getElementById('final-score');
+        const historyScores = document.getElementById('history-scores');
+        const leaderboard30 = document.getElementById('leaderboard-30');
+        const leaderboard60 = document.getElementById('leaderboard-60');
+        const mode30Btn = document.getElementById('mode-30');
+        const mode60Btn = document.getElementById('mode-60');
+        const restartButton = document.getElementById('restart');
+        const leaderboardBtn = document.getElementById('leaderboard-btn');
+        const closeLeaderboardBtn = document.getElementById('close-leaderboard');
+        const moleHitSound = document.getElementById('mole-hit');
+
+        let score = 0;
+        let timeLeft = 30;
+        let gameMode = 30; // 預設 30 秒
+        let gameActive = false;
+        let moles = [];
+        let hammer = { x: 0, y: 0, hitting: false, angle: 0 };
+
+        const holePositions = [
+            { x: 100, y: 100 }, { x: 250, y: 100 }, { x: 400, y: 100 }, { x: 550, y: 100 },
+            { x: 100, y: 250 }, { x: 250, y: 250 }, { x: 400, y: 250 }, { x: 550, y: 250 },
+            { x: 100, y: 400 }, { x: 250, y: 400 }, { x: 400, y: 400 }, { x: 550, y: 400 },
+            { x: 100, y: 550 }, { x: 250, y: 550 }, { x: 400, y: 550 }, { x: 550, y: 550 }
+        ];
+
+        // 繪製地鼠
+        function drawMole(x, y, visible) {
+            if (!visible) return;
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.fillStyle = '#8B4513';
+            ctx.beginPath();
+            ctx.arc(0, 0, 25, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#D2691E';
+            ctx.beginPath();
+            ctx.arc(-15, -15, 8, 0, Math.PI * 2);
+            ctx.arc(15, -15, 8, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(-8, -3, 2, 0, Math.PI * 2);
+            ctx.arc(8, -3, 2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'pink';
+            ctx.beginPath();
+            ctx.arc(0, 3, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+
+        // 繪製地洞
+        function drawHole(x, y) {
+            ctx.fillStyle = '#5C4033';
+            ctx.beginPath();
+            ctx.arc(x, y, 35, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // 繪製槌子
+        function drawHammer() {
+            ctx.save();
+            ctx.translate(hammer.x, hammer.y);
+            if (hammer.hitting) {
+                hammer.angle = -Math.PI / 4;
+                setTimeout(() => { hammer.hitting = false; hammer.angle = 0; }, 100);
+            } else {
+                hammer.angle = 0;
+            }
+            ctx.rotate(hammer.angle);
+            ctx.fillStyle = '#8B5A2B';
+            ctx.fillRect(-5, 0, 10, 40);
+            ctx.fillStyle = '#C0C0C0';
+            ctx.fillRect(-15, -15, 30, 15);
+            ctx.restore();
+        }
+
+        // 初始化地鼠
+        function initMoles() {
+            moles = holePositions.map(() => ({ visible: false, timer: 0 }));
+        }
+
+        // 隨機顯示地鼠
+        function spawnMole() {
+            if (!gameActive) return;
+            const availableHoles = moles
+                .map((mole, index) => (mole.visible ? -1 : index))
+                .filter(index => index !== -1);
+            if (availableHoles.length === 0) return;
+            const randomIndex = availableHoles[Math.floor(Math.random() * availableHoles.length)];
+            moles[randomIndex].visible = true;
+            moles[randomIndex].timer = setTimeout(() => {
+                moles[randomIndex].visible = false;
+            }, 1000);
+        }
+
+        // 遊戲循環
+        function gameLoop() {
+            if (!gameActive) return;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            holePositions.forEach(pos => drawHole(pos.x, pos.y));
+            moles.forEach((mole, index) => {
+                drawMole(holePositions[index].x, holePositions[index].y, mole.visible);
+            });
+            drawHammer();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // 倒數計時
+        function startTimer() {
+            const timer = setInterval(() => {
+                timeLeft--;
+                timeDisplay.textContent = `時間: ${timeLeft}`;
+                if (timeLeft <= 0) {
+                    clearInterval(timer);
+                    endGame();
+                }
+            }, 1000);
+        }
+
+        // 儲存分數
+        function saveScore(score, mode) {
+            let scores = JSON.parse(localStorage.getItem('moleGameScores') || '[]');
+            scores.unshift({ score, mode, timestamp: new Date().toLocaleString('zh-TW') });
+            if (scores.length > 50) scores = scores.slice(0, 50); // 限制總數
+            localStorage.setItem('moleGameScores', JSON.stringify(scores));
+            displayHistoryScores();
+            updateLeaderboard();
+        }
+
+        // 顯示歷史分數
+        function displayHistoryScores() {
+            const scores = JSON.parse(localStorage.getItem('moleGameScores') || '[]');
+            const recentScores = scores.slice(0, 5);
+            historyScores.innerHTML = recentScores.length ? recentScores.map((s, i) => `<li>${i + 1}. ${s.score} 分 (${s.mode}秒, ${s.timestamp})</li>`).join('') : '<li>尚無紀錄</li>';
+        }
+
+        // 更新排行榜
+        function updateLeaderboard() {
+            const scores = JSON.parse(localStorage.getItem('moleGameScores') || '[]');
+            const scores30 = scores.filter(s => s.mode === 30).sort((a, b) => b.score - a.score).slice(0, 5);
+            const scores60 = scores.filter(s => s.mode === 60).sort((a, b) => b.score - a.score).slice(0, 5);
+            leaderboard30.innerHTML = scores30.length ? scores30.map((s, i) => `<li>${i + 1}. ${s.score} 分 (${s.timestamp})</li>`).join('') : '<li>尚無紀錄</li>';
+            leaderboard60.innerHTML = scores60.length ? scores60.map((s, i) => `<li>${i + 1}. ${s.score} 分 (${s.timestamp})</li>`).join('') : '<li>尚無紀錄</li>';
+        }
+
+        // 結束遊戲
+        function endGame() {
+            gameActive = false;
+            gameOverScreen.classList.add('active');
+            finalScoreDisplay.textContent = `最終分數: ${score}`;
+            saveScore(score, gameMode);
+            moles.forEach(mole => clearTimeout(mole.timer));
+        }
+
+        // 點擊事件
+        canvas.addEventListener('click', (e) => {
+            if (!gameActive) return;
+            hammer.hitting = true;
+            moleHitSound.play().catch(() => {});
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+
+            moles.forEach((mole, index) => {
+                if (!mole.visible) return;
+                const pos = holePositions[index];
+                const dx = clickX - pos.x;
+                const dy = clickY - pos.y;
+                if (Math.sqrt(dx * dx + dy * dy) < 25) {
+                    mole.visible = false;
+                    clearTimeout(mole.timer);
+                    score += 10;
+                    scoreDisplay.textContent = `分數: ${score}`;
+                }
+            });
+        });
+
+        // 滑鼠移動控制槌子
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            hammer.x = e.clientX - rect.left;
+            hammer.y = e.clientY - rect.top;
+        });
+
+        // 模式選擇
+        mode30Btn.addEventListener('click', () => startGame(30));
+        mode60Btn.addEventListener('click', () => startGame(60));
+
+        // 開始遊戲
+        function startGame(mode) {
+            gameMode = mode;
+            score = 0;
+            timeLeft = mode;
+            gameActive = true;
+            scoreDisplay.textContent = `分數: ${score}`;
+            timeDisplay.textContent = `時間: ${timeLeft}`;
+            modeSelect.classList.remove('active');
+            initMoles();
+            startTimer();
+            setInterval(spawnMole, 600);
+            gameLoop();
+        }
+
+        // 重新開始
+        restartButton.addEventListener('click', () => {
+            score = 0;
+            timeLeft = gameMode;
+            gameActive = false;
+            scoreDisplay.textContent = `分數: ${score}`;
+            timeDisplay.textContent = `時間: ${timeLeft}`;
+            gameOverScreen.classList.remove('active');
+            modeSelect.classList.add('active');
+            initMoles();
+        });
+
+        // 排行榜顯示/關閉
+        leaderboardBtn.addEventListener('click', () => {
+            leaderboardScreen.classList.add('active');
+            gameOverScreen.classList.remove('active');
+        });
+        closeLeaderboardBtn.addEventListener('click', () => {
+            leaderboardScreen.classList.remove('active');
+            gameOverScreen.classList.add('active');
+        });
+
+        // 初始化
+        initMoles();
+        displayHistoryScores();
+        updateLeaderboard();
+    </script>
+</body>
+</html>
